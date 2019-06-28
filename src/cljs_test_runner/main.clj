@@ -122,7 +122,7 @@
 
 (defn test-cljs-namespaces-in-dir
   "Execute all ClojureScript tests in a directory."
-  [{:keys [env dir out watch ns-symbols ns-regexs var include exclude verbose compile-opts doo-opts]}]
+  [{:keys [env dir out watch ns-symbols ns-regexs var include exclude verbose compile-opts doo-opts no-exit]}]
   (when-let [nses (seq (filter (ns-filter-fn {:ns-symbols ns-symbols
                                               :ns-regexs ns-regexs})
                                (find-namespaces-in-dirs dir)))]
@@ -165,7 +165,8 @@
         (catch Exception e
           (println e))
         (finally
-          (exit @exit-code))))))
+          (when-not no-exit
+            (exit @exit-code)))))))
 
 (defn parse-kw
   "Parse a keyword from a string, dropping the initial : if required."
