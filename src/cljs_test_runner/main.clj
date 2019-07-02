@@ -52,17 +52,24 @@
 
 (defn render-test-runner-cljs
   "Renders a ClojureScript test runner from a seq of namespaces."
-  [nses {:keys [var include exclude]}]
+  [nses {:keys [var include exclude in-repl?]}]
   (str
     "(ns cljs-test-runner.gen
-       (:require [doo.runner :refer-macros [doo-tests]] [" (str/join "] [" nses)"]))"
+       (:require "
+    (if in-repl?
+      "[clojure.test :refer [run-tests]]"
+      "[doo.runner :refer-macros [doo-tests]]")
+    " [" (str/join "] [" nses)"]))"
      ns-filter-cljs
      "(filter-vars! [" (str/join " " (map #(str "(ns-publics " (format-value %) ")") nses)) "]
         (var-filter {:var " (format-filter var) "
                      :include " (format-filter include) "
                      :exclude " (format-filter exclude) "}))"
      "\n"
-     "(doo-tests " (str/join " " (map format-value nses)) ")"))
+    (if in-repl?
+      "(run-tests "
+      "(doo-tests ")
+    (str/join " " (map format-value nses)) ")"))
 
 (defn ns-filter-fn
   "Given possible namespace symbols and regexs, return a function that returns true if it's given namespace matches one of the rules."
@@ -107,6 +114,18 @@
     :else
     (edn/read-string (slurp path-or-data))))
 
+(defmacro with-dynamic-classloader
+  "Ensure the current thread's context classloader is a DynamicClassLoader"
+  [& body]
+  `(let [cl# (.getContextClassLoader (Thread/currentThread))]
+    (try
+      (when-not (instance? DynamicClassLoader cl#)
+        #_(prn 'setting-dynamic-classloader)
+        (.setContextClassLoader (Thread/currentThread) (DynamicClassLoader. cl#)))
+      ~@body
+      (finally
+        #_(.setContextClassLoader (Thread/currentThread) cl#)))))
+
 (defn add-loader-url
   "Add url string or URL to the highest level DynamicClassLoader url set."
   [url]
@@ -122,14 +141,16 @@
 
 (defn test-cljs-namespaces-in-dir
   "Execute all ClojureScript tests in a directory."
-  [{:keys [env dir out watch ns-symbols ns-regexs var include exclude verbose compile-opts doo-opts no-exit]}]
+  [{:keys [env dir out watch ns-symbols ns-regexs var include exclude verbose compile-opts doo-opts in-repl?] :as options}]
+  #_(prn 'options options)
   (when-let [nses (seq (filter (ns-filter-fn {:ns-symbols ns-symbols
                                               :ns-regexs ns-regexs})
                                (find-namespaces-in-dirs dir)))]
     (let [test-runner-cljs (-> nses
                                (render-test-runner-cljs {:var var
                                                          :include include
-                                                         :exclude exclude}))
+                                                         :exclude exclude
+                                                         :in-repl? in-repl?}))
           exit-code (atom 1)
           gen-path (str/join "/" [out "gen"])
           src-path (str/join "/" [gen-path "cljs_test_runner" "gen.cljs"])
@@ -144,9 +165,12 @@
                                      :lumo {:doo-env :lumo}
                                      :planck {:doo-env :planck})]
       (io/make-parents src-path)
+      #_(prn 'test-runner-cljs test-runner-cljs)
       (spit src-path test-runner-cljs)
+      #_(prn 'add-loader-url (io/file gen-path))
       (add-loader-url (io/as-url (io/file gen-path)))
-      (try
+
+      #_(try
         (let [build-opts (merge {:output-to out-path
                                  :output-dir out
                                  :target target
@@ -165,7 +189,7 @@
         (catch Exception e
           (println e))
         (finally
-          (when-not no-exit
+          (when-not in-repl?
             (exit @exit-code)))))))
 
 (defn parse-kw
@@ -220,13 +244,12 @@
 (defn -main
   "Creates a ClojureScript test runner and executes it with node (by default)."
   [& args]
-  (let [cl (.getContextClassLoader (Thread/currentThread))]
-      (.setContextClassLoader (Thread/currentThread) (clojure.lang.DynamicClassLoader. cl)))
   (let [{:keys [options errors summary]} (cli/parse-opts args cli-options)]
     (cond
       (:help options) (exit 0 summary)
       errors (exit 1 (error-msg errors))
-      :else (test-cljs-namespaces-in-dir options))))
+      :else (with-dynamic-classloader
+              (test-cljs-namespaces-in-dir options)))))
 
 (comment
   (defn run
