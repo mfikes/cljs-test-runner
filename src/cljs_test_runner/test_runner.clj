@@ -10,4 +10,4 @@
               :env :node                                    ; todo remove
               :in-repl? true}
         options)))
-  `(require 'cljs-test-runner.gen))
+  `(require 'cljs-test-runner.gen :reload))
